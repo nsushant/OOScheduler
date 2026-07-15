@@ -116,38 +116,6 @@ julia --project=.. -t auto scripts/run_mdls_trial.jl tight_normal 1
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-## Project Structure
-
-```
-FinalReleaseOOS/
-├── Project.toml              # Package manifest + dependencies
-├── LICENSE                   # MIT
-├── src/
-│   ├── FinalReleaseOOS.jl    # Module entry point (all imports + exports)
-│   ├── storage.jl            # Demand file monitoring + cleanup
-│   ├── sim/
-│   │   ├── orbital_mechanics.jl   # Two-body + J2, RK4, Walker Delta
-│   │   └── propagator.jl         # Orbit propagation → HDF5
-│   ├── cost/
-│   │   ├── lu_transfer.jl        # Low-thrust (Lu analytical model)
-│   │   ├── ht_transfer.jl        # High-thrust (Izzo Lambert solver)
-│   │   ├── cost_functions.jl     # LT/HT wrappers reading from HDF5
-│   │   ├── gen_cost_table.jl     # Pairwise cost table with plane grouping
-│   │   └── adaptive_grid.jl     # Adaptive mesh refinement for cost table
-│   ├── demands/
-│   │   └── generate_demands.jl   # Service demand generation
-│   ├── solver/
-│   │   ├── sol_utils.jl          # Schedule structs, greedy construction, archive
-│   │   └── algoMDLS.jl           # MDLS multi-objective optimizer
-│   └── plots/
-│       ├── visualise.jl          # Heatmaps, scatter, Pareto front, spider
-│       ├── gantt.jl              # Gantt charts (CairoMakie + VegaLite)
-│       └── gradients.jl          # ΔV gradient visualisation
-├── scripts/                  # Executable pipelines
-└── test/
-    └── runtests.jl
-```
-
 ## Key Types
 
 | Type | Description |

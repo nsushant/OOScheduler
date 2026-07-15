@@ -1,0 +1,182 @@
+# generate_sensitivity_demands.jl
+# Generates demand JLD2 files + greedy JSON seeds for sensitivity analysis.
+# Run: julia --project=.. generate_sensitivity_demands.jl [se_name ...]
+
+using FinalReleaseOOS
+using JLD2, JSON3, Dates, Random
+
+const N_TRIALS    = 5
+const REFUEL_TIME = 0.5
+
+_outdir_arg = filter(a -> startswith(a, "--outdir="), ARGS)
+const OUT_DIR = isempty(_outdir_arg) ?
+    "outputs/sensitivity_demands" :
+    _outdir_arg[1][length("--outdir=")+1:end]
+
+# ── Sub-experiment definitions ───────────────────────────────────────────────
+const SE1_LEVELS = [10, 50, 100, 150, 200]
+const SE2_LEVELS = ["normal", "uniform"]
+const SE3_LEVELS = [3000, 5000, 8000, 12000]
+const SE4_LEVELS = [1500.0, 3000.0, 5000.0, 8000.0, 10000.0]
+const SE5_LEVELS = [500.0, 1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 4000.0, 5000.0, 6000.0, 8000.0]
+
+const V1_VALUE    = 250_000.0
+const V2_VALUE    = 1_450_000.0
+const DEFAULT_ASSET_VALUE = V1_VALUE
+const V2_FRACTION = 0.30
+const SIM_START_DATE = Date(2024, 1, 1)
+
+const LAUNCH_DATES_PATH = "outputs/sat_launch_dates.json"
+const _SAT_LAUNCH_DATES = isfile(LAUNCH_DATES_PATH) ?
+    JSON3.read(read(LAUNCH_DATES_PATH), Dict{String,String}) : Dict{String,String}()
+isempty(_SAT_LAUNCH_DATES) &&
+    @warn "sat_launch_dates.json not found — using fallback age of 2.0 years"
+
+const MIXED_VALUES_PATH = "outputs/mixed_sat_values.json"
+const _MIXED_SAT_VALUES = isfile(MIXED_VALUES_PATH) ?
+    JSON3.read(read(MIXED_VALUES_PATH), Dict{String,Float64}) : Dict{String,Float64}()
+
+function depreciated_sat_values(sim, seed)
+    rng = MersenneTwister(seed)
+    sat_names = filter(n -> startswith(n, "sat"), sim.names)
+    Dict{String,Float64}(
+        n => if haskey(_MIXED_SAT_VALUES, n)
+                _MIXED_SAT_VALUES[n]
+             else
+                base = rand(rng) < V2_FRACTION ? V2_VALUE : V1_VALUE
+                ld   = get(_SAT_LAUNCH_DATES, n, nothing)
+                age  = isnothing(ld) ? 2.0 :
+                       max(0.0, Dates.value(SIM_START_DATE - Date(ld)) / 365.25)
+                weibull_depreciate(base, age)
+             end
+        for n in sat_names
+    )
+end
+
+subexperiments = [
+    (name = "size",
+     levels = [string(v) for v in SE1_LEVELS],
+     base_fn = (lv) -> Dict("num_demands" => parse(Int, lv), "type" => "random",
+                             "disttype" => "uniform", "deltaV_dist" => 8000.0,
+                             "time_dist" => [50.0, 1825.0], "service_times" => [1.0, 5.0],
+                             "num_satellites" => min(100, parse(Int, lv)),
+                             "default_asset_value" => DEFAULT_ASSET_VALUE),
+     seed_fn = (trial, lv) -> trial * 137 + parse(Int, lv),
+     greedy_dv_fn = (lv) -> 5000.0),
+
+    (name = "disttype",
+     levels = SE2_LEVELS,
+     base_fn = (lv) -> Dict("num_demands" => 200, "type" => "random",
+                             "disttype" => lv, "deltaV_dist" => 8000.0,
+                             "time_dist" => [50.0, 1825.0], "service_times" => [1.0, 5.0],
+                             "num_satellites" => 100,
+                             "default_asset_value" => DEFAULT_ASSET_VALUE),
+     seed_fn = (trial, lv) -> trial * 137 + Int(abs(hash(lv)) % 1000),
+     greedy_dv_fn = (lv) -> 5000.0),
+
+    (name = "dv",
+     levels = [string(v) for v in SE3_LEVELS],
+     base_fn = (lv) -> Dict("num_demands" => 200, "type" => "random",
+                             "disttype" => "uniform", "deltaV_dist" => Float64(parse(Int, lv)),
+                             "time_dist" => [50.0, 1825.0], "service_times" => [1.0, 5.0],
+                             "num_satellites" => 100,
+                             "default_asset_value" => DEFAULT_ASSET_VALUE),
+     seed_fn = (trial, lv) -> trial * 137 + parse(Int, lv) ÷ 100,
+     greedy_dv_fn = (lv) -> 5000.0),
+
+    (name = "dvbudget",
+     levels = [string(Int(v)) for v in SE4_LEVELS],
+     base_fn = (lv) -> Dict("num_demands" => 200, "type" => "random",
+                             "disttype" => "uniform", "deltaV_dist" => 8000.0,
+                             "time_dist" => [50.0, 1825.0], "service_times" => [1.0, 5.0],
+                             "num_satellites" => 100,
+                             "default_asset_value" => DEFAULT_ASSET_VALUE),
+     seed_fn = (trial, lv) -> trial * 137,
+     greedy_dv_fn = (lv) -> parse(Float64, lv)),
+
+    (name = "bcr_dvbudget",
+     levels = [string(Int(v)) for v in SE5_LEVELS],
+     base_fn = (lv) -> Dict("num_demands" => 200, "type" => "random",
+                             "disttype" => "uniform", "deltaV_dist" => 8000.0,
+                             "time_dist" => [50.0, 1825.0], "service_times" => [1.0, 5.0],
+                             "num_satellites" => 100,
+                             "default_asset_value" => DEFAULT_ASSET_VALUE),
+     seed_fn = (trial, lv) -> trial * 137,
+     greedy_dv_fn = (lv) -> parse(Float64, lv)),
+
+    (name = "bcr_mixed",
+     levels = [string(Int(v)) for v in SE5_LEVELS],
+     base_fn = (lv) -> begin
+         mixed_vals = isfile("outputs/mixed_sat_values.json") ?
+             Dict{String,Float64}(string(k) => v for (k,v) in JSON3.read(read("outputs/mixed_sat_values.json"))) :
+             Dict{String,Float64}()
+         Dict("num_demands" => 10000, "type" => "random",
+              "disttype" => "uniform", "deltaV_dist" => 8000.0,
+              "time_dist" => [50.0, 1825.0], "service_times" => [1.0, 5.0],
+              "num_satellites" => 224, "sat_values" => mixed_vals,
+              "default_asset_value" => DEFAULT_ASSET_VALUE)
+     end,
+     seed_fn = (trial, lv) -> trial * 137,
+     greedy_dv_fn = (lv) -> parse(Float64, lv)),
+
+    (name = "mixed_fleet",
+     levels = ["tight_normal", "loose_uniform"],
+     base_fn = (lv) -> Dict("num_demands" => 200, "type" => "random",
+                             "disttype" => lv == "tight_normal" ? "normal" : "uniform",
+                             "deltaV_dist" => 10000.0,
+                             "time_dist" => [50.0, 1825.0], "service_times" => [1.0, 5.0],
+                             "num_satellites" => 100,
+                             "default_asset_value" => DEFAULT_ASSET_VALUE),
+     seed_fn = (trial, lv) -> trial * 137,
+     greedy_dv_fn = (lv) -> 10000.0),
+]
+
+mkpath(OUT_DIR)
+sim = load_sim()
+
+_se_args     = filter(a -> !startswith(a, "--outdir="), ARGS)
+filter_names = isempty(_se_args) ? nothing : Set(_se_args)
+active_ses   = filter_names === nothing ? subexperiments :
+               filter(se -> se.name in filter_names, subexperiments)
+isempty(active_ses) && error("No sub-experiments matched: $(ARGS). Valid: $(join([s.name for s in subexperiments], ", "))")
+
+total = sum(length(se.levels) * N_TRIALS for se in active_ses)
+done  = Ref(0)
+
+@info "Loading cost table …"
+CostTable = load("outputs/cost_table.jld2", "CostTable")
+@info "Cost table loaded" n_entries=length(CostTable)
+@info "Building min-TOF table …"
+MinTOFTable = build_min_tof_table()
+
+for se in active_ses
+    @info "─── Sub-experiment: $(se.name) ───"
+    for lv in se.levels
+        for trial in 1:N_TRIALS
+            seed = se.seed_fn(trial, lv)
+            sat_values_trial = depreciated_sat_values(sim, seed)
+            params    = merge(se.base_fn(lv), Dict("seed" => seed, "sat_values" => sat_values_trial))
+            trial_str = lpad(trial, 2, '0')
+            key       = "$(se.name)_$(lv)"
+
+            @info "  Generating" key=key trial=trial seed=seed
+            demands = generate_demands(sim, params; cost_table=CostTable)
+
+            dem_path = joinpath(OUT_DIR, "$(key)_$(trial_str).jld2")
+            @save dem_path demands
+            @info "  Saved demands" path=dem_path n=length(demands["UIDs"])
+
+            greedy_dv = se.greedy_dv_fn(lv)
+            init_sol, init_unas = make_init_schedule(demands, sim;
+                nvehicles=20, refuel_time=REFUEL_TIME,
+                dv_budget=greedy_dv, min_tof_table=MinTOFTable)
+            greedy_path = joinpath(OUT_DIR, "$(key)_$(trial_str)_greedy.json")
+            save_schedule_json(init_sol, init_unas, greedy_path)
+
+            done[] += 1
+            @info "  Progress" done=done[] total=total
+        end
+    end
+end
+
+@info "Done. Generated $(done[]) demand+greedy pairs." OUT_DIR

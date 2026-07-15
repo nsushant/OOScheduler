@@ -1,0 +1,85 @@
+# run_mdls_trial.jl — run MDLS on one (key, trial) pair.
+# Run: julia --project=.. -t auto run_mdls_trial.jl <key> <trial> [demand_dir] [result_dir] [dv_budget]
+
+length(ARGS) >= 2 || error("Usage: julia run_mdls_trial.jl <key> <trial> [demand_dir] [result_dir] [dv_budget]")
+scenario_name = ARGS[1]
+trial_num     = parse(Int, ARGS[2])
+
+using FinalReleaseOOS
+using JLD2
+
+const MDLS_ITERS   = 3334
+const N_VEHICLES   = 100
+const REFUEL_TIME  = 0.5
+
+EXP_DIR   = length(ARGS) >= 3 ? ARGS[3] : "outputs/exp_demands"
+RES_DIR   = length(ARGS) >= 4 ? ARGS[4] : "outputs/exp_results"
+DV_BUDGET = length(ARGS) >= 5 ? parse(Float64, ARGS[5]) : 5000.0
+H5_FILE   = length(ARGS) >= 6 ? ARGS[6] : nothing
+mkpath(RES_DIR)
+
+trial_str = lpad(trial_num, 2, '0')
+dem_path  = joinpath(EXP_DIR, "$(scenario_name)_$(trial_str).jld2")
+isfile(dem_path) ||
+    error("Demand file not found: $dem_path — run generate_experiment_demands.jl first")
+
+@info "Loading demands" scenario=scenario_name trial=trial_num
+local demands
+@load dem_path demands
+demands["UIDs"] = collect(1:length(demands["sat_identifiers"]))
+
+@info "Loading tables …"
+ct     = load("outputs/cost_table.jld2", "CostTable")
+n_sats = maximum(k[1] for k in keys(ct))
+mintof = build_min_tof_table()
+min_dv = build_min_dv_table(ct, n_sats)
+sim    = load_sim()
+
+@info "Building greedy warm start …"
+init_sol, init_unas = make_init_schedule(demands, sim;
+    nvehicles=N_VEHICLES, refuel_time=REFUEL_TIME, dv_budget=DV_BUDGET)
+
+@info "Running MDLS" scenario=scenario_name trial=trial_num iters=MDLS_ITERS
+t0 = time()
+archive = MDLS(MDLS_ITERS, demands, sim, ct, mintof, min_dv;
+               nvehicles        = N_VEHICLES,
+               dv_budget        = DV_BUDGET,
+               init_sol         = init_sol,
+               init_unassigned  = init_unas)
+elapsed = time() - t0
+@info "MDLS done" elapsed_sec=round(elapsed; digits=1) n_solutions=length(archive.solutions)
+
+outpath = joinpath(RES_DIR, "mdls_$(scenario_name)_$(trial_str).csv")
+rows = [(archive.total_deltaV[i],
+         archive.total_serv_time_unassigned[i],
+         archive.total_vehicles_used[i])
+        for i in eachindex(archive.solutions)
+        if archive.total_deltaV[i] < INFEASIBLE_LEG_COST]
+
+open(outpath, "w") do io
+    println(io, "f1_dv,f2_unrecovered_value,f3_vehicles")
+    for (dv, us, veh) in rows
+        println(io, "$(round(dv; digits=4)),$(round(us; digits=6)),$veh")
+    end
+end
+@info "Saved front" path=outpath valid=length(rows) elapsed_sec=round(elapsed; digits=1)
+
+if H5_FILE !== nothing && !isempty(rows)
+    using HDF5
+    data = Matrix{Float64}(undef, length(rows), 3)
+    for (i, (dv, us, veh)) in enumerate(rows)
+        data[i, 1] = dv
+        data[i, 2] = us
+        data[i, 3] = Float64(veh)
+    end
+    group_path = "mdls/$(scenario_name)/trial_$(trial_str)"
+    total_demand_value = haskey(demands, "asset_values") ?
+        sum(demands["asset_values"]) : 0.0
+    h5open(H5_FILE, "cw") do fid
+        haskey(fid, group_path) && delete_object(fid, group_path)
+        fid[group_path] = collect(data')
+        attrs(fid[group_path])["columns"]            = "f1_dv,f2_unrecovered_value,f3_vehicles"
+        attrs(fid[group_path])["total_demand_value"] = total_demand_value
+    end
+    @info "Saved to HDF5" path=H5_FILE group=group_path
+end

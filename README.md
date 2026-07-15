@@ -1,6 +1,6 @@
 # OOScheduler
 
-On-orbit Scheduler is a library for scheduling on orbit satellite service requests subject to orbital mechanics, transfer cost and vehicle capacity constraints. The library permits two types of objects, "DEPOT" objects from which vehciles are dispatched and "SAT" objects that emit service requests. 
+On-orbit Scheduler is a library for scheduling on orbit satellite service requests subject to orbital mechanics, transfer cost and vehicle capacity constraints. 
 
 ## Installation
 

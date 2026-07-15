@@ -127,4 +127,4 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0 — free for non-commercial use. For commercial licensing, contact the author.

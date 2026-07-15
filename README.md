@@ -128,3 +128,19 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 ## License
 
 PolyForm Noncommercial 1.0.0 — free for non-commercial use. For commercial licensing, contact the author.
+
+## Usage 
+
+If you use the package, please cite as, 
+
+```
+@software{   nigudkar2026ooscheduler,
+             author    = {Nigudkar, Sushant},
+             title     = {{OOScheduler}: On-Orbit Servicing Mission Scheduling Library},
+             year      = {2026},
+             url       = {https://github.com/nsushant/OOScheduler},
+             version   = {0.1.0},
+             license   = {PolyForm-Noncommercial-1.0.0}
+         }    
+
+```
